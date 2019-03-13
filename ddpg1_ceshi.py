@@ -129,6 +129,7 @@ class Critic(object):
         self.ISWeights = tf.placeholder(tf.float32, [None, 1], name='IS_weights')
         with tf.variable_scope('TD_error'):
             self.loss = tf.reduce_mean(self.ISWeights * tf.squared_difference(self.target_q, self.q))
+            tf.summary.scalar('loss', self.loss)
 
         with tf.variable_scope('C_train'):
             self.train_op = tf.train.AdamOptimizer(self.lr).minimize(self.loss, global_step=GLOBAL_STEP)
@@ -155,8 +156,11 @@ class Critic(object):
                 q = tf.layers.dense(net, 1, kernel_initializer=init_w, bias_initializer=init_b, trainable=trainable)   # Q(s,a)
         return q
 
-    def learn(self, s, a, r, s_, ISW):
+    def learn(self, s, a, r, s_, ISW,i):
         _, abs_td = self.sess.run([self.train_op, self.abs_td], feed_dict={S: s, self.a: a, R: r, S_: s_, self.ISWeights: ISW})
+        merged = tf.summary.merge_all()
+        result = self.sess.run(merged, feed_dict={S: s, self.a: a, R: r, S_: s_, self.ISWeights: ISW})
+        AC_writer.add_summary(result, i)
         if self.t_replace_counter % self.t_replace_iter == 0:
             self.sess.run([tf.assign(t, e) for t, e in zip(self.t_params, self.e_params)])
         self.t_replace_counter += 1
@@ -310,10 +314,11 @@ saver = tf.train.Saver(max_to_keep=100)
 sess.run(tf.global_variables_initializer())
 
 if OUTPUT_GRAPH:
-    tf.summary.FileWriter('logs', graph=sess.graph)
+    AC_writer=tf.summary.FileWriter('logs', graph=sess.graph)
 
 var = 0.3  # control exploration
 var_min = 0.01
+go=1
 
 for i_episode in range(MAX_EPISODES):
     # s = (hull angle speed, angular velocity, horizontal speed, vertical speed, position of joints and joints angular speed, legs contact with ground, and 10 lidar rangefinder measurements.)
@@ -339,8 +344,9 @@ for i_episode in range(MAX_EPISODES):
             b_r = b_M[:, -STATE_DIM - 1: -STATE_DIM]
             b_s_ = b_M[:, -STATE_DIM:]
 
-            abs_td = critic.learn(b_s, b_a, b_r, b_s_, ISWeights)
+            abs_td = critic.learn(b_s, b_a, b_r, b_s_, ISWeights,go)
             actor.learn(b_s)
+            go+=1
             for i in range(len(tree_idx)):  # update priority
                 idx = tree_idx[i]
                 M.update(idx, abs_td[i])
